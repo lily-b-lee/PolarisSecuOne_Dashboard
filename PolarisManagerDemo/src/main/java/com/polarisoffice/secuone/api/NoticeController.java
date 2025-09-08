@@ -18,14 +18,15 @@ public class NoticeController {
 	  private final NoticeService svc;
 	  public NoticeController(NoticeService svc) { this.svc = svc; }
 
-	  @PostMapping
-	  public ResponseEntity<String> create(
-	      @Valid @RequestBody NoticeCreateReq req,
-	      @RequestParam(defaultValue = "true") boolean push
-	  ) throws Exception {
-	    String id = push ? svc.createAndPush(req) : svc.create(req);
-	    return ResponseEntity.ok(id);
-	  }
+@PostMapping
+public ResponseEntity<String> create(
+    @Valid @RequestBody NoticeCreateReq req,
+    @RequestParam(defaultValue = "true") boolean push
+) throws Exception {
+    // 핵심: 서비스 시그니처에 맞춰 boolean 두 번째 인자를 넘긴다
+    String id = svc.createAndPush(req, push);
+    return ResponseEntity.ok(id);
+}
 
 	  @PutMapping("/{id}")
 	  public ResponseEntity<Void> update(@PathVariable String id, @RequestBody NoticeUpdateReq req) throws Exception {
