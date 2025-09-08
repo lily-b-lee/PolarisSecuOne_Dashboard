@@ -1,0 +1,19 @@
+name: Runner smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    # 라벨 불일치 이슈를 피하려고 self-hosted만 지정
+    runs-on: self-hosted
+    steps:
+      - name: Print env
+        run: |
+          echo "whoami: $(whoami)"
+          id
+      - name: Docker check
+        run: |
+          docker --version
+          docker ps
+          docker compose version
