@@ -8,15 +8,15 @@ permissions:
   contents: read
   packages: write
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_REPO: polaris-secuone-dashboard
-  IMAGE_LATEST: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_REPO }}:latest
-  IMAGE_SHA:    ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_REPO }}:sha-${{ github.sha }}
-
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_REPO: polaris-secuone-dashboard
+    outputs:
+      image_latest: ${{ steps.vars.outputs.image_latest }}
+      image_sha:    ${{ steps.vars.outputs.image_sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +26,7 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # 1) 빌드툴 자동 감지
+      # 빌드툴 자동 감지
       - name: Detect build tool
         id: detect
         run: |
@@ -38,18 +38,20 @@ jobs:
             echo "No Maven/Gradle found in repo root"; exit 1
           fi
 
-      # 2) 빌드 (Maven/Gradle 중 해당되는 것만)
+      # Maven 빌드 (wrapper 우선, 없으면 mvn)
       - name: Build (Maven)
         if: steps.detect.outputs.tool == 'maven'
         run: |
-          mvn -B -DskipTests package
+          if [ -f ./mvnw ]; then ./mvnw -q -DskipTests package; else mvn -B -DskipTests package; fi
+
+      # Gradle 빌드 (wrapper 우선)
       - name: Build (Gradle)
         if: steps.detect.outputs.tool == 'gradle'
         run: |
           chmod +x ./gradlew || true
           ./gradlew clean bootJar -x test || ./gradlew bootJar -x test
 
-      # 3) 산출물 JAR 자동 탐색 (서브폴더 대응)
+      # 산출물 JAR 자동 탐색
       - name: Locate JAR
         id: jar
         run: |
@@ -58,22 +60,32 @@ jobs:
           echo "Found JAR: $JAR"
           test -n "$JAR" || (echo "JAR not found"; exit 1)
 
-      # 4) GHCR 로그인 (GITHUB_TOKEN 사용)
-      - name: Login GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      # 이미지 태그 계산(잡 출력으로 전달)
+      - name: Set image names
+        id: vars
+        run: |
+          echo "image_latest=${REGISTRY}/${{ github.repository_owner }}/${IMAGE_REPO}:latest" >> $GITHUB_OUTPUT
+          echo "image_sha=${REGISTRY}/${{ github.repository_owner }}/${IMAGE_REPO}:sha-${{ github.sha }}" >> $GITHUB_OUTPUT
 
-      # 5) Docker 빌드 & 푸시 (JAR 경로 주입)
+      # GHCR 로그인(GITHUB_TOKEN)
+      - name: Login GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      # Docker 빌드 & 푸시 (JAR 경로 주입)
       - name: Build & Push image
         run: |
           docker build \
             --build-arg JAR_FILE="${{ steps.jar.outputs.jar }}" \
-            -t "$IMAGE_LATEST" -t "$IMAGE_SHA" .
-          docker push "$IMAGE_LATEST"
-          docker push "$IMAGE_SHA"
+            -t "${{ steps.vars.outputs.image_latest }}" \
+            -t "${{ steps.vars.outputs.image_sha }}" .
+          docker push "${{ steps.vars.outputs.image_latest }}"
+          docker push "${{ steps.vars.outputs.image_sha }}"
 
   deploy:
     needs: build-and-push
     runs-on: self-hosted
+    env:
+      IMAGE_LATEST: ${{ needs.build-and-push.outputs.image_latest }}
     steps:
       - name: Login GHCR (read)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
