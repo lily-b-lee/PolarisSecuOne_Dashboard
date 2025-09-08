@@ -26,32 +26,40 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # 빌드툴 자동 감지
-      - name: Detect build tool
-        id: detect
+      # 1) 레포 전체에서 pom.xml / build.gradle(.kts) 검색 → 모듈 디렉터리/툴 출력
+      - name: Locate module (pom/gradle)
+        id: module
         run: |
-          if [ -f "mvnw" ] || [ -f "pom.xml" ]; then
-            echo "tool=maven" >> $GITHUB_OUTPUT
-          elif [ -f "gradlew" ] || [ -f "build.gradle" ]; then
-            echo "tool=gradle" >> $GITHUB_OUTPUT
-          else
-            echo "No Maven/Gradle found in repo root"; exit 1
+          set -e
+          FILE="$(git ls-files '**/pom.xml' '**/build.gradle' '**/build.gradle.kts' | head -n1 || true)"
+          if [ -z "$FILE" ]; then
+            echo "No Maven/Gradle build file found (searched recursively)."; exit 1
           fi
+          DIR="$(dirname "$FILE")"
+          echo "module_dir=$DIR" >> $GITHUB_OUTPUT
+          if [[ "$FILE" == *pom.xml ]]; then
+            echo "tool=maven" >> $GITHUB_OUTPUT
+          else
+            echo "tool=gradle" >> $GITHUB_OUTPUT
+          fi
+          echo "Found build file: $FILE"
 
-      # Maven 빌드 (wrapper 우선, 없으면 mvn)
+      # 2) Maven 빌드 (모듈 경로 지정)
       - name: Build (Maven)
-        if: steps.detect.outputs.tool == 'maven'
-        run: |
-          if [ -f ./mvnw ]; then ./mvnw -q -DskipTests package; else mvn -B -DskipTests package; fi
+        if: steps.module.outputs.tool == 'maven'
+        run: mvn -B -DskipTests -f "${{ steps.module.outputs.module_dir }}/pom.xml" package
 
-      # Gradle 빌드 (wrapper 우선)
+      # 3) Gradle 빌드 (모듈 경로에서 wrapper 우선)
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.module.outputs.tool == 'gradle'
       - name: Build (Gradle)
-        if: steps.detect.outputs.tool == 'gradle'
+        if: steps.module.outputs.tool == 'gradle'
+        working-directory: ${{ steps.module.outputs.module_dir }}
         run: |
           chmod +x ./gradlew || true
-          ./gradlew clean bootJar -x test || ./gradlew bootJar -x test
+          if [ -f ./gradlew ]; then ./gradlew bootJar -x test || ./gradlew build -x test; else gradle build -x test; fi
 
-      # 산출물 JAR 자동 탐색
+      # 4) 산출물 JAR 자동 탐색(레포 전체)
       - name: Locate JAR
         id: jar
         run: |
@@ -60,18 +68,18 @@ jobs:
           echo "Found JAR: $JAR"
           test -n "$JAR" || (echo "JAR not found"; exit 1)
 
-      # 이미지 태그 계산(잡 출력으로 전달)
+      # 5) 이미지 태그 계산(잡 출력으로 전달)
       - name: Set image names
         id: vars
         run: |
           echo "image_latest=${REGISTRY}/${{ github.repository_owner }}/${IMAGE_REPO}:latest" >> $GITHUB_OUTPUT
           echo "image_sha=${REGISTRY}/${{ github.repository_owner }}/${IMAGE_REPO}:sha-${{ github.sha }}" >> $GITHUB_OUTPUT
 
-      # GHCR 로그인(GITHUB_TOKEN)
+      # 6) GHCR 로그인(GITHUB_TOKEN)
       - name: Login GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
-      # Docker 빌드 & 푸시 (JAR 경로 주입)
+      # 7) Docker 빌드 & 푸시 (JAR 경로 주입)
       - name: Build & Push image
         run: |
           docker build \
