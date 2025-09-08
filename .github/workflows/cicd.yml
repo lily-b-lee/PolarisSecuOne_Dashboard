@@ -5,6 +5,11 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+# 내장 토큰 권한 설정: 패키지 쓰기(푸시) 허용
+permissions:
+  contents: read
+  packages: write
+
 env:
   REGISTRY: ghcr.io
   IMAGE_REPO: polaris-secuone-dashboard
@@ -22,11 +27,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Maven 빌드
       - name: Test & Build (Maven)
         run: ./mvnw -q -DskipTests package
 
+      # GHCR 로그인: 내장 GITHUB_TOKEN 사용 (시크릿 추가 불필요)
       - name: Login GHCR
-        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build & Push
         run: |
@@ -36,11 +43,13 @@ jobs:
 
   deploy:
     needs: build-and-push
-    runs-on: [self-hosted, linux, x64, secuone]   # 러너 라벨 값과 일치해야 함
+    # 서버에 설치한 self-hosted 러너 라벨과 일치해야 함
+    runs-on: [self-hosted, linux, x64, secuone]
     steps:
-      - name: Deploy on server
+      - name: Login GHCR (read)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Pull & up
         run: |
-          docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GHCR_TOKEN }}
           cd /home/tomcat/secuone
           docker pull "$IMAGE_LATEST"
           docker compose up -d
